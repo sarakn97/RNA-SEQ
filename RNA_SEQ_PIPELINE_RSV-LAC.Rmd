@@ -1,0 +1,1975 @@
+---
+title: "RNASeq - Full Pipeline"
+author: "Sara Nicholson"
+date: "2023"
+output: html_document
+---
+
+```{r}
+setwd("/saran")
+```
+
+# RNA SEQ
+
+Steps:
+1. FastQC Quality Check
+2. Alignmnent using STAR
+3. Remove Ribosomal Genes with RSeQC
+4. Quantify Reads using featureCount()/Salmon() for genes/transcripts
+5. DESeq2/EdgeR/Limma for Differential Expression
+6. GSEA analysis with GAGE/ClusterProfiler()
+7. WGCNA - Weighted Gene Correlation Network Analysis
+
+# Check Read Quality of Fastq Files
+*This code can be copied and pasted into a linux terminal for use and should not be run in RStudio*
+```{bash}
+# Change directory to directory containing fastq files
+cd /path/to/RAW_FASTQ_FILES
+
+# Run FastQC, "-o" specifies the output directory
+fastqc *.fastq.gz -o /path/to/output/fastqc/
+```
+
+# Alignment STAR
+*This code can be copied and pasted into a linux terminal for use and should not be run in RStudio*
+first Gunzip genome fasta and annotations GTF file for STAR.
+```{bash}
+# create genome directory to store index
+# "mkdir" is a command to create a directory in bash script and then you specify the path to the directory that you are creating: "genomeDir"
+mkdir /path/to/genomeDir
+
+# build star Index File
+# --genomeDir specifies the output path of the genome index that you are creating
+# --genomeFastaFiles is where you specify the path to your unzipped human genome fasta file
+# --sjdbGTFfile is where you specify the path to the annotation file to go along with the human genome fasta file, this annotation file contains information about the reads in the fasta file such as which are exons, introns, etc.
+# sjdbOverhang should be set to [ read length - 1 ]
+STAR --runMode genomeGenerate --genomeDir /path/to/genomeDir --genomeFastaFiles /path/to/genome/fasta/GRCh38.primary_assembly.genome.fa –sjdbGTFfile  /path/to/gtf/file/gencode.v41.primary_assembly.annotation.gtf.gz –sjdbOverhang 149 --runThreadN 12
+
+
+# Run Alignment
+# create output directory
+mkdir /path/to/STAR/results/
+# --genomeDir specifies the path to the genome index you created in the above command
+# --readFilesIn specifies the path to the R1 file followed by R2 (created loop to run for all sample pairs)
+# --outFileNamePrefix specifies the path to the file where you want your output which you created above
+# --outSAMtype BAM SortedByCoordinate specifies the output file type, "BAM" is the binary version of the SAM format which is a file type for alignments
+for i in /path/to/fastq/*R1.fastq; do name=$(basename ${i} _L001_R1.fastq);
+       	echo ${name}; 
+	STAR --genomeDir /path/to/genomeDir --runThreadN 12 --readFilesIn /path/to/fastq/${name}_L001_R1.fastq  /path/to/fastq/${name}_L001_R2.fastq --outFileNamePrefix /path/to/STAR/results/${name} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within --outSAMattributes Standard --outFilterMatchNminOverLread 0 --outFilterScoreMinOverLread 0 --outFilterMatchNmin  40; done 
+```
+
+# Remove Ribosomal Genes
+```{bash}
+# Samtools to index aligned bam files
+samtools index /path/to/bam/file.bam  
+# you will run this individually for mock and rsv samples or use loop as above for STAR
+# Now you will have a .bai file along with the bam file, this is required for RSeQC.
+
+# RSeQC
+# Install RSeQC: https://rseqc.sourceforge.net/#download-ribosome-rna-update-on-07-08-2015
+# Download "hd38_rRNA.bed.gz" from : https://sourceforge.net/projects/rseqc/files/BED/Human_Homo_sapiens/
+# go to the scripts directory where you downloaded RSeQC & run:
+python3 split_bam.py -i /leyao/Active/saran/RNA2/STAR/mock1Aligned.sortedByCoord.out.bam -r /home/sara/Downloads/RSeQC-5.0.1/scripts/hg38_rRNA.bed -o /leyao/Active/saran/RNA2/finalRNAdata/RSeQC_Out/M1_
+
+# create loop & run for all bam files 
+# -i is where you input your bam file, -r is the bed file with the rRNA genes, -o is the output directory/prefix
+```
+
+
+# Quantification
+Quantify Genes for all samples - 3 Lactobacillus infected, 3 Mock samples, 3 RSV infected, 3 Co-Infected with Lactobacillus + RSV
+```{r}
+library(Rsubread)
+
+#### MOCK 1
+mock1 <- featureCounts(files="/saran/RNA2/RSeQC_Out/M1_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+# Extra Options =  minMQS = 20, largestOverlap = T
+
+# Save Results
+write.csv(mock1$annotation, "/saran/RNA2/QUANT/M1_annotations.csv")
+write.csv(mock1$counts, "/saran/RNA2/QUANT/M1_counts.csv")
+write.csv(mock1$stat, "/saran/RNA2/QUANT/M1_stats.csv")
+
+#### MOCK 2
+mock2 <- featureCounts(files="/saran/RNA2/RSeQC_Out/M2_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(mock2$annotation, "/saran/RNA2/QUANT/M2_annotations.csv")
+write.csv(mock2$counts, "/saran/RNA2/QUANT/M2_counts.csv")
+write.csv(mock2$stat, "/saran/RNA2/QUANT/M2_stats.csv")
+
+#### MOCK 3
+mock3 <- featureCounts(files="/saran/RNA2/RSeQC_Out/M3_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(mock3$annotation, "/saran/RNA2/QUANT/M3_annotations.csv")
+write.csv(mock3$counts, "/saran/RNA2/QUANT/M3_counts.csv")
+write.csv(mock3$stat, "/saran/RNA2/QUANT/M3_stats.csv")
+
+#### RSV 1
+rsv1 <- featureCounts(files="saran/RNA2/RSeQC_Out/R1_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+# Extra Options =  minMQS = 20, largestOverlap = T
+
+# Save Results
+write.csv(rsv1$annotation, "saran/RNA2/QUANT/R1_annotations.csv")
+write.csv(rsv1$counts, "saran/RNA2/QUANT/R1_counts.csv")
+write.csv(rsv1$stat, "saran/RNA2/QUANT/R1_stats.csv")
+
+#### RSV 2
+rsv2 <- featureCounts(files="saran/RNA2/RSeQC_Out/R2_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(rsv2$annotation, "saran/RNA2/QUANT/R2_annotations.csv")
+write.csv(rsv2$counts, "saran/RNA2/QUANT/R2_counts.csv")
+write.csv(rsv2$stat, "saran/RNA2/QUANT/R2_stats.csv")
+
+#### RSV 3
+rsv3 <- featureCounts(files="saran/RNA2/RSeQC_Out/R3_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(rsv3$annotation, "saran/RNA2/QUANT/R3_annotations.csv")
+write.csv(rsv3$counts, "saran/RNA2/QUANT/R3_counts.csv")
+write.csv(rsv3$stat, "saran/RNA2/QUANT/R3_stats.csv")
+
+### LAC 1
+lac1 <- featureCounts(files="saran/RNA2/RSeQC_Out/L1_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(lac1$annotation, "saran/RNA2/QUANT/L1_annotations.csv")
+write.csv(lac1$counts, "saran/RNA2/QUANT/L1_counts.csv")
+write.csv(lac1$stat, "saran/RNA2/QUANT/L1_stats.csv")
+
+### LAC 2
+lac2 <- featureCounts(files="saran/RNA2/RSeQC_Out/L2_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(lac2$annotation, "saran/RNA2/QUANT/L2_annotations.csv")
+write.csv(lac2$counts, "saran/RNA2/QUANT/L2_counts.csv")
+write.csv(lac2$stat, "saran/RNA2/QUANT/L2_stats.csv")
+
+### LAC 3
+lac3 <- featureCounts(files="saran/RNA2/RSeQC_Out/L3_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(lac3$annotation, "saran/RNA2/QUANT/L3_annotations.csv")
+write.csv(lac3$counts, "saran/RNA2/QUANT/L3_counts.csv")
+write.csv(lac3$stat, "saran/RNA2/QUANT/L3_stats.csv")
+
+### LAC/RSV 1
+co1 <- featureCounts(files="saran/RNA2/RSeQC_Out/CO1_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(co1$annotation, "saran/RNA2/QUANT/CO1_annotations.csv")
+write.csv(co1$counts, "saran/RNA2/QUANT/CO1_counts.csv")
+write.csv(co1$stat, "saran/RNA2/QUANT/CO1_stats.csv")
+
+### LAC/RSV 2
+co2 <- featureCounts(files="saran/RNA2/RSeQC_Out/CO2_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(co2$annotation, "saran/RNA2/QUANT/CO2_annotations.csv")
+write.csv(co2$counts, "saran/RNA2/QUANT/CO2_counts.csv")
+write.csv(co2$stat, "saran/RNA2/QUANT/CO2_stats.csv")
+
+### LAC/RSV 3
+co3 <- featureCounts(files="saran/RNA2/RSeQC_Out/CO3_.ex.bam",isPairedEnd=TRUE, GTF.featureType="exon", GTF.attrType="gene_id", annot.ext= "Users/gencode.v42.primary_assembly.annotation.gff3", isGTFAnnotationFile=TRUE, countMultiMappingReads = FALSE, countReadPairs=T)
+
+# Save Results
+write.csv(co3$annotation, "saran/RNA2/QUANT/CO3_annotations.csv")
+write.csv(co3$counts, "saran/RNA2/QUANT/CO3_counts.csv")
+write.csv(co3$stat, "saran/RNA2/QUANT/CO3_stats.csv")
+```
+
+Combine all Quantified CSV Files into one chart, Samples should be columns and genes/features as rows. 
+
+# EdgeR #
+
+### Initializations
+```{r}
+library(edgeR)
+library(dplyr)
+library(tibble)
+```
+
+**Read Counts File**
+```{r}
+# Read in your count table
+x <- read.csv("/saran/RNA2/QUANT/ENSG_Counts.csv", row.names="features")
+head(x)
+# Choose Samples you would like to include in analysis
+x <- x %>% dplyr::select(Mock1, Mock2, Mock3, RSV1,RSV2,RSV3, Lac1, Lac2, Lac3, Co1, Co2, Co3)
+# x <- x %>% dplyr::select(Mock1, Mock2, Mock3, RSV1, RSV2, RSV3)
+# x <- x %>% dplyr::select(Mock1, Mock2, Mock3, Co1,Co2,Co3)
+# x <- x %>% dplyr::select(Mock1, Mock2, Mock3, Lac1, Lac2, Lac3)
+# x <- x %>% dplyr::select(RSV1,RSV2,RSV3,Co1, Co2, Co3)
+# x <- x %>% dplyr::select(Lac1, Lac2, Lac3, Co1, Co2, Co3)
+# x <- x %>% dplyr::select(Lac1, Lac2, Lac3, RSV1,RSV2,RSV3)
+
+##### ADD GENE NAME & ENSEMBL ID TO METADATA
+# load biomart package
+library(biomaRt)
+# Create vector of ensembl gene IDs
+ENSG <- as.vector(row.names(x))
+
+# define biomart object
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+# query biomart - retrieve corresponding gene names to ENSG
+results <- getBM(attributes = c("ensembl_gene_id_version", "external_gene_name", "ensembl_gene_id"),
+               filters = "ensembl_gene_id_version", values = ENSG,
+               mart = mart)
+head(results)
+
+# Write conversion chart to CSV
+# write.csv(results, "/saran/RNA2/Limma-EDgeR/ENSG_symbol_conversions.csv")
+```
+
+**Create DGElist object for EDgeR**
+```{r}
+# Create Factored Groups from Column Names 
+# Must be in same order as column names on count table
+DataGroups <- c("mock", "mock", "mock", "rsv", "rsv", "rsv", "lac", "lac", "lac", "co", "co", "co")
+# DataGroups <- c("mock", "mock", "mock", "rsv", "rsv", "rsv") # , "rsv"
+# DataGroups <- c("mock", "mock", "mock", "co", "co", "co")
+# DataGroups <- c("mock", "mock", "mock", "lac", "lac", "lac")
+# DataGroups <- c("rsv", "rsv", "rsv", "co", "co", "co")
+# DataGroups <- c("lac", "lac", "lac", "co", "co", "co")
+# DataGroups <- c("lac", "lac", "lac", "rsv", "rsv", "rsv")
+
+# Create DGEList for EdgeR
+d <- DGEList(counts=x,group=factor(DataGroups))
+d$samples
+```
+
+### Filter Out Lowly Expressed Genes
+Use the cpm function & remove features that are not expressed over 1 CPM in at least 2 samples.
+```{r}
+# Check Prior Dimensions
+dim(d)
+
+# Function to remove features not expressed over 10 CPM in at least 2 samples (smallest.group.size - 1)
+keep <- rowSums(cpm(d)>10) >=2 
+d <- d[keep,]
+
+# Check Dimensions after Filtering
+dim(d)
+
+# get gene ids
+# Get Gene Symbols to match Ensembl Gene IDs
+ensembl <- as.data.frame(rownames(d))
+colnames(ensembl) <- "ensembl_gene_id_version"
+conversions <- read.csv("/saran/RNA2/Limma-EDgeR/ENSG_symbol_conversions.csv")
+gene_names <- left_join(ensembl, conversions, by=c("ensembl_gene_id_version"))
+
+# Add Gene Names to DGElist Object
+d$genes <- data.frame(ENSEMBL=rownames(d), SYMBOL=gene_names$external_gene_name) 
+
+# filter to iir_genes
+iir <- which(d$genes$ENSEMBL %in% ensgids_iir)
+rtv <- which(d$genes$ENSEMBL %in% ensgids_rtv)
+timsp <- which(d$genes$ENSEMBL %in% ensgids_timsp)
+rti <- which(d$genes$ENSEMBL %in% ensgids_rti)
+ir <- which(d$genes$ENSEMBL %in% ensgids_ir)
+rtcs <- which(d$genes$ENSEMBL %in% ensgids_rtcs)
+drtv <- which(d$genes$ENSEMBL %in% ensgids_drtv)
+d <- d[iir,]
+```
+
+```{r}
+# EdgeR suggested filtration method
+# keep.exprs <- filterByExpr(d, group=d$samples$group)
+# d <- d[keep.exprs,, keep.lib.sizes=FALSE]
+# dim(d)
+```
+
+### Normalize for Library Size: TMM Normalization.
+*'If a small proportion of highly expressed genes consume a substantial proportion of the total library size for a particular sample, this will cause the remaining genes to be under-sampled for that sample.....The calcNormFactors function normalizes the library sizes by finding a set of scaling factors for the library sizes that minimizes the log-fold changes between the samples for most genes.' -EdgeR*
+```{r}
+# set method to TMM or CPM normalization will be implemented
+d <- calcNormFactors(d, method = "TMM")
+# view Normalization Factors
+d$samples
+dim(d)
+
+# use cpm() function to get normalized counts - applies normalization factors so it is TMM when in combination with above function
+dtmm <- as.data.frame(cpm(d))
+head(dtmm)
+
+# Write TMM normalized Counts to Data Frame CSV for future use
+# write.csv(dtmm, "/saran/RNA2/Limma-EDgeR/tmm_norm_counts.csv")
+
+dtmm$rowname <- row.names(dtmm)
+df <- left_join(dtmm, top_gene_table, by = "rowname")
+write.csv(df, "/saran/RNA2/DTMM_Allsamples_Table.csv")
+
+#### Genes in Purple Module WGCNA
+dfPRP
+dtmm$ensgid <- row.names(dtmm)
+
+DTMM <- dtmm %>% filter(ensgid %in% dfPRP$gene) %>% dplyr::select(Mock1, Mock2, Mock3, Co1, Co2, Co3)
+DTMM
+write.csv(DTMM, "/saran/RNA2/wgcna_purple_co_mock.csv")
+
+colnames(dfPRP) <- c("ensembl_gene_id", "ensgid", "module", "symbol", "entrez", "name")
+df <- left_join(DTMM, dfPRP, by = "ensgid")
+df
+nulls <- which(df$symbol == "NULL")
+df[nulls, "symbol"] <- df[nulls,"ensgid"]
+
+nas <- which(is.na(df$symbol))
+df[nas, "symbol"] <- df[nas,"ensgid"]
+
+row.names(df) <- df$symbol
+DTMM <- df %>% dplyr::select(Mock1, Mock2, Mock3, Co1, Co2, Co3)
+
+```
+
+```{r}
+library(EDASeq)
+x <- as.factor(DataGroups)
+set <- newSeqExpressionSet(as.matrix(dtmm),
+                           phenoData = data.frame(x, row.names=colnames(d)))
+set
+
+library(RColorBrewer)
+colors <- brewer.pal(3, "Set2")
+plotRLE(set, outline=FALSE, ylim=c(-4, 4), col=colors[x])
+
+plotPCA(set, col=colors[x], cex=1.2)
+```
+
+
+## Differential Expression Analysis
+# Initializations
+```{r}
+library(limma)
+library(Glimma)
+library(dplyr)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(biomaRt)
+```
+
+**Unsupervised Clustering of Samples**
+```{r}
+# equivalent to plotMDS of cpm(d, log = T) 
+# par( mfrow= c(1,2))
+# layout(matrix(1:2, nrow = 1))
+plotMDS(d, col = as.numeric(d$samples$group))
+plotMDS(d, col = as.numeric(d$samples$group), gene.selection = "common", cex = 1, pch = 19)
+
+# Principal Component Analysis data visualization 
+library(factoextra)
+library(ggplot2)
+library(ggforce)
+
+dtmm1 <- t(as.matrix(d$counts))
+dtmm1 <- as.data.frame(dtmm1)
+dtmm1$samp <- c("mock", "mock", "mock", "rsv", "rsv", "rsv", "lac", "lac", "lac", "co", "co", "co")
+pca <- prcomp(dtmm1[,1:293],  
+                   scale = F)
+summary(pca)
+
+fviz_pca_ind(pca, 
+             habillage=dtmm1$samp, label = 'none', repel = T) +  ggforce::geom_mark_ellipse(aes(fill = Groups,
+                        color = Groups)) +
+  theme(legend.position = 'bottom') +
+  coord_equal()
+```
+
+
+
+```{r}
+# Create Design Matrix (Model by Group : RSV vs. MOCK)
+design <- model.matrix(~d$samples$group)
+rownames(design) <- colnames(d)
+design
+
+# Contrast Matrix when looking at all samples
+colnames(design) <- c("co","lac", "mock","rsv")
+contr.matrix <- makeContrasts(
+   RSVvsMock = rsv - mock,
+   RSVvsLac = rsv - lac,
+   LacvsMock = lac - mock,
+   COvsMock = co - mock,
+   COvsLac = co - lac,
+   COvsRSV = co - rsv,
+   levels = colnames(design))
+contr.matrix
+```
+
+**Limma**
+```{r}
+# Calculate Weighted Likelihoods, prepare to be linearly modeled
+v <- voomWithQualityWeights(d, design, plot = TRUE)
+v
+
+# Write VoomWithQualityWeights output to CSV for future input into WGCNA
+wgcna_v <- as.data.frame(v$E)
+# write.csv(wgcna_v, "/saran/RNA2/WGCNA/wgcna_COMOCK.csv")
+
+# linear model
+# fit linear model
+vfit <- lmFit(v, design)
+# vfit <- contrasts.fit(vfit, contrasts=contr.matrix) # if used contrast matrix
+# Empirical Bayes Transform
+vfit <- eBayes(vfit)
+plotSA(vfit)
+# Variance no longer dependent on mean
+# write.csv(vfit$coefficients, "/saran/RNA2/Limma-EDgeR/vfit_rsv2.csv")
+
+# Check number of up + down regulated genes
+dt <- decideTests(vfit)
+summary(dt)
+
+# TOP Differential expressed GENES
+topTable(vfit, coef=2, sort.by = "P")
+top <- topTable(vfit,coef=2,number=Inf,sort.by="P", adjust.method = "fdr")
+interest <- which(top$P.Value<0.05 & abs(top$logFC) >= 1.5 & abs(top$logFC) < 2) 
+
+# Add annotations to table & save
+conversions <- read.csv("/saran/RNA2/Limma-EDgeR/ENSG_symbol_conversions.csv")
+top_gene_table <- left_join(tibble::rownames_to_column(top), conversions, by=c("rowname" = "ensembl_gene_id_version"))
+head(top_gene_table[,2:10], 102)
+
+```
+
+**EdgeR - No Limma**
+```{r}
+dge <- estimateDisp(d, design, robust = T)
+
+fit <- glmQLFit(dge, design)
+
+fit <- glmQLFTest(fit)
+
+# Results Table
+res_edgeR=as.data.frame(topTags(fit, n=Inf))
+head(res_edgeR)
+res_edgeR$ensembl_gene_id_version <- row.names(res_edgeR)
+head(res_edgeR)
+
+# Add Annotations to result table
+conversions <- read.csv("/saran/ANALYSIS/LimmaEdgeR/ENSG_symbol_conversions.csv")
+res <- left_join(res_edgeR, conversions, by=c("ensembl_gene_id_version"))
+res_edgeR <- res %>% dplyr::select(external_gene_name, logCPM, PValue, logFC, FDR, ensembl_gene_id_version)
+```
+
+
+**Explore DE Genes**
+```{r}
+# Get Gene Symbols to match Ensembl Gene IDs
+ensembl <- as.data.frame(rownames(d))
+colnames(ensembl) <- "ensembl_gene_id_version"
+conversions <- read.csv("/saran/RNA2/Limma-EDgeR/ENSG_symbol_conversions.csv")
+gene_names <- left_join(ensembl, conversions, by=c("ensembl_gene_id_version"))
+
+# Add Gene Names to DGElist Object
+d$genes <- data.frame(ENSEMBL=rownames(d), SYMBOL=gene_names$external_gene_name) 
+
+# Create Interactive MD plot
+glMDPlot(vfit, counts=dtmm, groups= d$samples$group, side.main = "SYMBOL", anno = d$genes, launch=FALSE, status = dt)
+
+# View Differential Expressed Gene Counts at significance = 5%
+summary(decideTests(vfit))
+
+# Volcano Plot
+volcanoplot(vfit, coef=2, highlight = 30, names = d$genes$SYMBOL)
+
+# MD Plot
+plotMD(vfit, status = d$samples$group, hl.pch = 16, hl.cex = 0.7, bg.cex =0.7, bg.pch = 21) 
+```
+
+**HEATMAP*
+```{r}
+# Subset to the 102 Significant  at adj.p.val < 0.05
+top_gene_table <- top_gene_table[1:102,]
+
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+library(gplots)
+library(heatmap3)
+
+topgenes <- top_gene_table$rowname[1:102]
+
+# topgenes <- covrsv$rowname[1:7]
+i <- which(d$genes$ENSEMBL %in% topgenes)
+
+# colnames(dtmm) <- c("Mock 1", "Mock 2", "Mock 3", "RSV 1", "RSV 2", "RSV 3") #  , "Lac 1", "Lac 2", "Lac 3", "Co-Inf 1", "Co-Inf 2", "Co-Inf 3")
+dtmm <- as.matrix(dtmm)
+heatmap.2(dtmm[i,], scale="row", labRow=d$genes$SYMBOL[i], labCol= colnames(dtmm), trace="none", density.info="none", dendrogram="column", cexRow = 0.8, cexCol = 1, Rowv = FALSE, srtCol = 45, col =redgreen(100))
+```
+
+Average Expression DTMM
+```{r}
+# Mke Heatmap with annotations of genes in the Innate Immune Response & Response to Virus Gene Sets from Gene ONtology Biological Processes Database
+# GO - Gene Ontology Database
+data(go.sets.hs)
+data(go.subs.hs)
+gobpsets = go.sets.hs[go.subs.hs$BP]
+# Add Entrez ID to Top Gene Table
+top_gene_table$entrez = mapIds(org.Hs.eg.db,
+                     keys=top_gene_table$ensembl_gene_id, 
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+iir_genes <- gobpsets$`GO:0045087 innate immune response`
+rtv_genes <- gobpsets$`GO:0009615 response to virus`
+
+# Get Genes from top_gene_table that are in the elected GO Sets
+top_gene_entrez <- top_gene_table %>% filter(entrez %in% iir_genes)
+ensgids_iir <- top_gene_entrez$rowname
+top_gene_entrez <- top_gene_table %>% filter(entrez %in% rtv_genes)
+ensgids_rtv <- top_gene_entrez$rowname
+i <- which(d$genes$ENSEMBL %in% top_gene_entrez$rowname)
+
+dtmm_102 <- dtmm %>% filter(row.names(dtmm) %in% ensgids_iir)
+dtmm_102
+
+DTMM102 <- dtmm_102
+# Get Average Expression across the 3 samples for each group
+DTMM102$Mock <- apply(dtmm_102[,1:3], 1, mean)
+DTMM102$RSV <- apply(dtmm_102[,4:6], 1, mean)
+DTMM102$Lac <- apply(dtmm_102[,7:9], 1, mean)
+DTMM102$Co <- apply(dtmm_102[,10:12], 1, mean)
+DTMM102 <- DTMM102 %>% dplyr::select(Mock, RSV, Lac, Co)
+
+write.csv(DTMM102 , "/saran/RNA2/Limma-EDgeR/AverageEXpr_DTMM_allsamps.csv")
+DTMM <- read.csv("/saran/RNA2/Limma-EDgeR/AverageEXpr_DTMM_allsamps.csv")
+
+DTMM <- left_join(DTMM, covmock, by=c("X" = "rowname"))
+write.csv(DTMM , "/saran/RNA2/Limma-EDgeR/AverageEXpr_DTMM_102.csv")
+# fill in gaps in external gene name
+DTMM <- read.csv("/saran/RNA2/Limma-EDgeR/AverageEXpr_DTMM_102.csv")
+DTMM <- DTMM %>% dplyr::select(Mock, RSV, Lac, Co,external_gene_name)
+write.csv(DTMM , "/saran/RNA2/Limma-EDgeR/AverageEXpr_DTMM_102.csv")
+
+avexpr <- read.csv("/saran/RNA2/Limma-EDgeR/AverageEXpr_DTMM_102.csv")
+row.names(avexpr) <- avexpr$external_gene_name
+avexpr <- avexpr %>% dplyr::select(Mock, RSV, Lac, Co)
+
+### Add COlor Column to Indicate which Genes are in the GO Gene Sets
+#initiate cols with all black
+cols1 <- rep('black', nrow(avexpr))
+#turn red the specified rows in tf
+cols1[row.names(avexpr) %in% comock_102_immune$external_gene_name] <- 'seagreen'
+
+#initiate cols with all grey - annotation
+cols2 <- rep('grey', nrow(avexpr))
+#turn red the specified rows in tf
+cols2[row.names(avexpr) %in% iirRTV_immune$external_gene_name] <- 'seagreen'
+cols2[row.names(avexpr) %in% iirRTV_rtv$external_gene_name] <- 'purple'
+
+#initiate cols with all black - words
+cols3 <- rep('black', nrow(avexpr))
+cols3[row.names(avexpr) %in% iirRTV_immune$external_gene_name] <- 'seagreen'
+cols3[row.names(avexpr) %in% iirRTV_rtv$external_gene_name] <- 'purple'
+
+par(mar = c(5,5,8,10))
+heatmap.2(as.matrix(avexpr), scale="row", labRow=row.names(avexpr), labCol=  colnames(avexpr), trace="none", density.info="none", dendrogram="column", cexRow = 0.9, cexCol = 1.5, Rowv = FALSE, srtCol = 0, col =bluered(100), RowSideColors = cols2, colRow = cols3)
+```
+
+**Another Heatmap**
+```{r}
+avexpr <- read.csv("/saran/RNA2/Limma-EDgeR/AveExpr_102.csv")
+row.names(avexpr) <- avexpr$external_gene_name
+avexpr <- avexpr %>% dplyr::select(AveExprCOMock, AveExprRSVMock)
+heatmap.2(as.matrix(avexpr), scale="row", labRow=row.names(avexpr), labCol=  c( "Co-Inf v. Mock",  "RSV v. Mock"), trace="none", density.info="none", dendrogram="column", cexRow = 0.6, cexCol = 1, Rowv = FALSE, srtCol = 35, col =bluered(100))
+
+pdf("AveExpr_Heatmap.pdf", width = 13,height = 0.4*102)
+p <- heatmap.2(as.matrix(avexpr), scale="row", labRow=row.names(avexpr), labCol=  c( "Co-Inf v. Mock",  "RSV v. Mock #1","RSV v. Mock #2"), trace="none", density.info="none", dendrogram="column", cexRow = 0.9, cexCol = 1.2, Rowv = FALSE, srtCol = 25, col =bluered(100))
+dev.off()
+
+avexpr <- avexpr %>% filter(external_gene_name %in% rsvgenes)
+write.csv(avexpr, "/saran/RNA2/Limma-EDgeR/AveExpr_RSVvMock.csv")
+```
+
+**Heatmap showing significant genes in Red and non-significant in grayscale for the three differnent comparisons: (CO-Mock)(RSV-MOCK)(LAC-MOCK)**
+```{r}
+# Load Table of Adjusted P-Values for 102 genes found significant in Co-Inf vs. Mock for RSV v. Mock & Lac vs. Mock also
+pval<- read.csv("/saran/RNA2/Limma-EDgeR/adjpval_ggplot_lac_co_rsv.csv")
+library(ggplot2); library(scales)
+
+# Create breaks in coclor-scale
+main_val <- c(0, seq(4.053558e-09, 0.05, length = 0.25),  
+              seq(0.05, 1, by = 0.025))         
+
+# values for legend (I made two patterns; ignore outliers or not)
+legend_values <- main_val[-1]
+
+# colour scale   
+mycol <- c("#970707FF", "#BF2F2FFF", "#E75757FF",  "#FFFFFFFF", "#FBFBFBFF", "#F4F4F4FF", "#EEEEEEFF", "#E7E7E7FF", "#E0E0E0FF", "#DADADAFF", "#D3D3D3FF", "#CCCCCCFF", "#C5C5C5FF", "#BFBFBFFF", "#B8B8B8FF", "#B1B1B1FF", "#ABABABFF", "#A4A4A4FF", "#9D9D9DFF", "#979797FF", "#909090FF", "#898989FF", "#828282FF", "#7C7C7CFF", "#757575FF", "#6E6E6EFF", "#686868FF", "#616161FF", "#5A5A5AFF", "#535353FF", "#4D4D4DFF", "#464646FF", "#3F3F3FFF", "#393939FF", "#323232FF", "#2B2B2BFF", "#242424FF", "#1E1E1EFF", "#171717FF")                         
+
+
+# Plot Heat Map
+ggplot(data = pval, aes(x = sample, y = external_gene_name)) +
+  geom_tile(aes(fill = Adj.P.Val)) + scale_fill_gradientn(colours = mycol, values = rescale(main_val), guide = T) + theme(axis.text.x = element_text(angle = 0, hjust = 1, color="black"), legend.position="top", legend.key.size = unit(2.5, "cm")) + xlab("Sample") + ylab("Gene") 
+
+pval$external_gene_name <- with(pval,factor(external_gene_name,levels = rev(genes)))
+pval$sample <-  with(pval,factor(sample,levels = c("CovMock", "RSVvMock")))
+ggplot(data = pval, aes(x = sample, y = external_gene_name)) +
+  geom_tile(aes(fill = Adj.P.Val)) + scale_fill_gradientn(colours = mycol, values = rescale(main_val), guide = F) + xlab("Sample") + ylab("Gene") 
+
+# Add Color Scale Legend
+ g + scale_colour_gradientn(colours = mycol[-1], values = rescale(legend_values),
+                           limits = c(-100, max(dat$ratio2, na.rm=T)), breaks= c(-80, -40, 0, 40, 80),
+                           guide = guide_colorbar(nbin=100))
+```
+
+### Volcano Plot 
+```{r}
+# Results from Limma/EdgeR
+data <- top_gene_table
+
+diffexpr <- which(data$adj.P.Val <= 0.05)
+data$FDR_Significance <- "Not Significant"
+
+# Remove cases with NA Values
+de <- data[complete.cases(data), ]
+# if log2Foldchange > 1 and pvalue < 0.05, set as "UP" 
+de$FDR_Significance[de$logFC > 0.5 & de$adj.P.Val < 0.05] <- "Significantly Up-Regulated"
+# if log2Foldchange < -1 and pvalue < 0.05, set as "DOWN"
+de$FDR_Significance[de$logFC < -0.5 & de$adj.P.Val < 0.05] <- "Significantly Down-Regulated"
+# if log2Foldchange < -1 and pvalue < 0.05, set as "DOWN"
+
+# Labels for Significant
+de$delabel <- NA
+de$delabel[de$FDR_Significance != "Not Significant"] <- de$external_gene_name[de$FDR_Significance != "Not Significant"]
+
+
+library(ggrepel)
+options(ggrepel.max.overlaps = Inf)
+
+ggplot(data=de, aes(x=logFC, y=-log10(adj.P.Val), col=FDR_Significance, label=delabel)) +
+        geom_point() + 
+        theme_minimal() +
+        geom_text_repel(size=3.5) +
+        scale_color_manual(values=c("black", "blue",  "red", "green",  "purple")) +
+        geom_vline(xintercept=c(-0.5, 0.5), col="blue", linetype=2) +
+        geom_hline(yintercept=-log10(0.05), col="blue", linetype=2) + 
+        labs(y = "-log10(Adjusted.Pvalue)", x = "Log2 Fold Change") + 
+        theme(axis.title.x = element_text(size=16, face="bold"), axis.title.y = element_text( size=16, face="bold"), legend.text = element_text(size=), legend.title = element_text(size=12)) + ylim(0,7)
+```
+
+```{r}
+####### VERY CONFUSING & INTENSE VOLCANO PLOT :)
+# Results from Limma/EdgeR
+co_mock <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_COvMock_cpm10.csv")
+rsv13_mock <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_RSV13vMock_cpm10.csv")
+rsv2_mock <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_RSV2vMock_cpm10.csv")
+rsv_mock <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_RSVvsMock_cpm15.csv")
+initial_rsvMock <- read.csv("/saran/RNA_Sara/finalRNAdata/EdgeR_Limma/top_DEGs_cpm15.csv")
+data <- top_gene_table
+
+# Co-Infection
+initial <- initial_rsvMock$external_gene_name[1:35]
+co <- co_mock$external_gene_name[1:102]
+rsv13 <- rsv13_mock$external_gene_name[1:25]
+rsv2 <- rsv2_mock$external_gene_name[1:85]
+rsv <- top_gene_table$external_gene_name[1:25]
+sigall3 <- intersect(rsv2,intersect(co,rsv13))
+sigall4 <- intersect(initial, sigall3)
+sigall <- intersect(initial, rsv)
+rsv0 <- setdiff(rsv, initial)
+ini0 <- setdiff(initial,rsv)
+onlyinCo1 <- setdiff(co, rsv13)
+onlyinCo2 <- setdiff(co, rsv2)
+onlyinCo3 <- setdiff(co, initial)
+onlyinCo4 <- setdiff(co, rsv)
+onlyinCoM <- intersect(onlyinCo3, intersect(onlyinCo4, intersect(onlyinCo1, onlyinCo2)))
+initial_only <- intersect(setdiff(initial,co), intersect(setdiff(initial, rsv13), setdiff(initial, rsv2)))
+saveRDS(onlyinCoM, "/saran/RNA2/Limma-EDgeR/onlyNcoinfection.rds")
+corsv2 <- intersect(co,rsv2)
+corsv2 <- setdiff(corsv2, rsv13)
+corsv2 <- setdiff(corsv2, rsv)
+corsv2 <- setdiff(corsv2, initial)
+corsv13 <- intersect(co,rsv13)
+corsv13 <- setdiff(corsv13, rsv2)
+corsv13 <- setdiff(corsv13, rsv)
+corsv13 <- setdiff(corsv13, initial)
+corsvAll <- intersect(co,rsv)
+corsvAll <- setdiff(corsvAll, rsv2)
+corsvAll <- setdiff(corsvAll, rsv13)
+corsvAll <- setdiff(corsvAll, initial)
+coin <- intersect(co,initial)
+coin2 <- setdiff(coin, rsv13)
+coin3 <- setdiff(coin, rsv2)
+coin4 <- setdiff(coin, rsv)
+rsvO <- intersect(initial, intersect(rsv2, rsv13))
+rsvOnly <- setdiff(rsvO, co)
+rsv13_mock$external_gene_name[1:25] %in% co_mock$external_gene_name[1:102]
+rsv13_mock$external_gene_name[1:25] %in% rsv2_mock$external_gene_name[1:85]
+sigINrsv13Only <- rsv13_mock$external_gene_name[16]
+sigINrsv13_co_notrsv2 <- rsv13_mock$external_gene_name[14]
+rsv2_mock$external_gene_name[1:85] %in% co_mock$external_gene_name[1:102]
+sigINrsv2Only <- rsv2_mock$external_gene_name[c(33,41,46,51,58,61,68,73,76,77,78,82,83,85)]
+diffexpr <- which(data$adj.P.Val <= 0.05)
+data$FDR_Significance <- "Not Significant"
+
+
+# Remove cases with NA Values
+de <- data[complete.cases(data), ]
+# COMock <-which(de$external_gene_name %in% onlyinCoM)
+# CORSV2 <- which(de$external_gene_name %in% corsv2)
+# RSV123 <-which(de$external_gene_name %in% rsvOnly)
+# RSV13only <-which(de$external_gene_name %in% sigINrsv13Only)
+RSVonly <-which(de$external_gene_name %in% rsv0)
+SIG <- which(de$external_gene_name %in% sigall)
+INO <-which(de$external_gene_name %in% ini0)
+# SIG4 <- which(de$external_gene_name %in% sigall4)
+# coRSV13 <-which(de$external_gene_name %in% corsv13)
+# coRSVall <-which(de$external_gene_name %in% corsvAll)
+# COIN <-which(de$external_gene_name %in% coin4)
+# # if log2Foldchange > 1 and pvalue < 0.05, set as "UP" 
+de$FDR_Significance[de$logFC > 1 & de$adj.P.Val < 0.05] <- "Significantly Up-Regulated Co-Inf"
+# if log2Foldchange < -1 and pvalue < 0.05, set as "DOWN"
+de$FDR_Significance[de$logFC < -1 & de$adj.P.Val < 0.05] <- "Significantly Down-Regulated Co-Inf"
+# if log2Foldchange < -1 and pvalue < 0.05, set as "DOWN"
+de$FDR_Significance[COMock] <- "Significant only in Co-Infection vs. Mock"
+de$FDR_Significance[RSV13only] <- "Significant only in RSV 1 & 3 vs Mock"
+de$FDR_Significance[RSVonly] <- "Only Significant in Run #1 - RSV v. Mock"
+de$FDR_Significance[SIG] <- "Significant in both RSV v. Mock Runs"
+#de$FDR_Significance[SIG4] <- "Significant in Co-Infection & both RSV v Mock Runs"
+de$FDR_Significance[INO] <- "Only Significant in Run #2 - RSV v. Mock"
+de$FDR_Significance[CORSV2] <- "Significant in Co-Infection & RSV 2 only"
+de$FDR_Significance[RSV123] <- "Significant in RSV, not Co-Inf"
+de$FDR_Significance[coRSV13] <- "Significant in Co-Infection & RSV 1&3 only"
+de$FDR_Significance[coRSVall] <- "Significant in Co-Infection & Full RSV 2nd Run Only"
+de$FDR_Significance[COIN] <- "Significant in Co-Infection & initial RSV v Mock only"
+# Labels for Significant
+de$delabel <- NA
+de$delabel[de$FDR_Significance != "Not Significant"] <- de$external_gene_name[de$FDR_Significance != "Not Significant"]
+
+
+library(ggrepel)
+options(ggrepel.max.overlaps = Inf)
+
+ggplot(data=de, aes(x=logFC, y=-log10(adj.P.Val), col=FDR_Significance, label=delabel)) +
+        geom_point() + 
+        theme_minimal() +
+        geom_text_repel(size=4) +
+        scale_color_manual(values=c("black", "blue","green", "red",  "purple", "darkorange2", "blue", "yellow", "seagreen", "orchid", "maroon1")) +
+        geom_vline(xintercept=c(-1, 1), col="blue", linetype=2) +
+        geom_hline(yintercept=-log10(0.05), col="blue", linetype=2) + 
+        labs(y = "-log10(Adjusted.Pvalue)", x = "Log2 Fold Change") + 
+        theme(axis.title.x = element_text(size=16, face="bold"), axis.title.y = element_text( size=16, face="bold"), legend.text = element_text(size=10), legend.title = element_text(size=12)) + ylim(0,3.5)
+  
+```
+
+## Boxplots
+```{r}
+# Open pdf file
+pdf(file= "./boxplots.pdf")
+  
+library(ggplot2)
+d$norm <- dtmm
+
+topgenes <- top_gene_table$rowname[302]
+top <- which(d$genes$ENSEMBL %in% topgenes)
+top
+
+# boxplots with significance
+library(ggplot2)
+library(ggpubr)
+grip2 <- read.csv("/home/sara/Documents/RNA_Seq/CLDN10.csv")
+ggplot(grip2, aes(group, expr )) + geom_boxplot() + xlab("Sample") + ylab("Expression (TMM)") + labs(title = "CLDN10")  +
+  geom_signif(comparisons = list(c("co", "rsv"), c("co", "mock"), c("co", "lac")), y_position = c(230, 240, 250), tip_length = 0, vjust = 0.2,
+              map_signif_level=F, test = "t.test") +  scale_x_discrete(name = "Sample", labels = c("Co-Inf","Lac","Mock","RSV")) + geom_jitter(width = 0)
+
+# create a 2X2 grid
+par( mfrow= c(11,2))
+layout(matrix(1:4, nrow = 2))
+par(mar = c(5,3,2,2))
+
+boxplot(unlist(d$norm[1929,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[1929])
+stripchart(unlist(d$norm[1929,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[4603,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[4603])
+stripchart(unlist(d$norm[4603,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[7071,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[7071])
+stripchart(unlist(d$norm[7071,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[1090,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[1090])
+stripchart(unlist(d$norm[1090,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[1539,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[1539])
+stripchart(unlist(d$norm[1539,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[1844,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[1844])
+stripchart(unlist(d$norm[1844,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[2574,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[2574])
+stripchart(unlist(d$norm[2574,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[2612,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[2612])
+stripchart(unlist(d$norm[2612,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[2614,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[2614])
+stripchart(unlist(d$norm[2614,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[4369,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[4369])
+stripchart(unlist(d$norm[4369,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[4522,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[4522])
+stripchart(unlist(d$norm[4522,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[4672,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[4672])
+stripchart(unlist(d$norm[4672,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[6689,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[6689])
+stripchart(unlist(d$norm[6689,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+
+boxplot(unlist(d$norm[7871,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[7871])
+stripchart(unlist(d$norm[7871,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[8017,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[8017])
+stripchart(unlist(d$norm[8017,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+
+boxplot(unlist(d$norm[8190,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[8190])
+stripchart(unlist(d$norm[8190,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[8595,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[8595])
+stripchart(unlist(d$norm[8595,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+
+boxplot(unlist(d$norm[8781,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[8781])
+stripchart(unlist(d$norm[8781,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[10048,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[10048])
+stripchart(unlist(d$norm[10048,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+
+boxplot(unlist(d$norm[6481,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[6481])
+stripchart(unlist(d$norm[6481,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[7329,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[7329])
+stripchart(unlist(d$norm[7329,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[8024,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[8024])
+stripchart(unlist(d$norm[8024,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+boxplot(unlist(d$norm[8200,]) ~ d$samples$group, ylab = "Expression (TMM normalized)", xlab = d$genes$SYMBOL[8200])
+stripchart(unlist(d$norm[8200,])~ d$samples$group,              # Data
+           method = "jitter", # Random noise
+           pch = 19,          # Pch symbols
+           col = 4,           # Color of the symbol
+           vertical = TRUE,   # Vertical mode
+           add = TRUE)        # Add it over
+```
+
+
+# GSEA #
+### initializations
+```{r, message=FALSE}
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(pathview)
+library(gage)
+library(gageData)
+library(annotate)
+library(clusterProfiler)
+library(DOSE)
+library(enrichplot)
+```
+
+## Read in Contrasts
+Read in the Results from performing Differential Expression Analysis with EdgeR/Limma. 
+```{r}
+# RSV vs Mock
+res <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_RSVvsMock_cpm15.csv")
+# CO vs Mock
+res <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_COvsMock_cpm10.csv")
+# Co vs Lac
+res <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_COvsLac_cpm20.csv")
+# RSV vs Lac
+res <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_RSVvLac_cpm15.csv")
+
+res <- top_gene_table
+res[,"ensembl_gene_id_version"] <- res[,"rowname"]
+
+# remove unnecessary columns
+res <- res %>% dplyr::select(ensembl_gene_id_version, logFC, AveExpr, t, P.Value, adj.P.Val, B)
+head(res)
+```
+
+**Remove Version for Ensembl Gene ID**
+Must get ENSG IDs without version for AnnotationDbi to retrieve entrez IDs for GAGE.
+```{r}
+# load biomart package
+library(biomaRt)
+
+# Create vector of ensembl gene IDs
+ENSGv <- as.vector(res$ensembl_gene_id_version)
+
+# define biomart object
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+# listAttributes(mart)
+
+# query biomart - retrieve corresponding ENSGs to ENSGv
+results <- getBM(attributes = c("ensembl_gene_id", "ensembl_gene_id_version"),
+               filters = "ensembl_gene_id_version", values = ENSGv,
+               mart = mart)
+head(results)
+
+# Join tables & re-format
+table <- left_join(res, results, by=c("ensembl_gene_id_version"))
+res <- table %>% dplyr::select(ensembl_gene_id, everything())
+head(res)
+```
+
+**Use AnnotationDbi to retrieve Entrez IDs and other annotations (optional).**
+```{r}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+
+# Add Annotations
+res$entrez = mapIds(org.Hs.eg.db,
+                     keys=res$ensembl_gene_id, 
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res$symbol = mapIds(org.Hs.eg.db,
+                     keys=res$ensembl_gene_id, 
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res$name =   mapIds(org.Hs.eg.db,
+                     keys=res$ensembl_gene_id, 
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res$go =   mapIds(org.Hs.eg.db,
+                     keys=res$ensembl_gene_id, 
+                     column="GO",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+# GAGE
+```{r}
+# load libraries
+data(kegg.sets.hs)
+data(sigmet.idx.hs)
+kegg.sets.hs.sm = kegg.sets.hs[sigmet.idx.hs]
+
+# Prepare Input for GAGE - all log fold change values and entrez IDs
+foldchanges = res$logFC
+names(foldchanges) = res$entrez
+
+# Get KEGG gene sets for homo sapiens (hsa)
+kg.hsa <- kegg.gsets(species = "hsa", id.type = "entrez")
+# Get KEGG gene sets for Signaling and  Metabolism
+kegg.sigmet.gs <- kg.hsa$kg.sets[kg.hsa$sigmet.idx]
+# KEGG gene set by disease
+kegg.dise.gs <- kg.hsa$kg.sets[kg.hsa$dise.idx]
+
+# Differential Pathway Analysis - Signaling and Metabolic
+# Get the results - KEGG
+keggresSM = gage(foldchanges, gsets=kegg.sigmet.gs, same.dir=TRUE)
+# Look at both up (greater), down (less), and statistics.
+#lapply(keggresSM, head)
+
+
+# GO - Gene Ontology Database
+data(go.sets.hs)
+data(go.subs.hs)
+# GO - Biological Process
+gobpsets = go.sets.hs[go.subs.hs$BP]
+gobpres = gage(foldchanges, gsets=gobpsets, same.dir=TRUE)
+#lapply(gobpres, head)
+
+# GO - Cellular Component
+goCCsets = go.sets.hs[go.subs.hs$CC]
+goCCres = gage(foldchanges, gsets=goCCsets, same.dir=TRUE)
+#lapply(goCCres, head)
+
+# GO - Molecular Function
+goMFsets = go.sets.hs[go.subs.hs$MF]
+goMFres = gage(foldchanges, gsets=goMFsets, same.dir=TRUE)
+#lapply(goMFres, head)
+
+## MSigDB - Molecular Signatures Database
+msigdb <- readList("/saran/RNA_Sara/h.all.v2022.1.Hs.entrez.gmt") 
+msigres = gage(foldchanges, gsets=msigdb, same.dir=TRUE)
+#lapply(msigres, head)
+
+# Write Results
+write.table(msigres$greater, file = "/saran/RNA2/GSEA/COvsMock_MSIG_greater.txt", sep = "\t")
+write.table(gobpres$greater, file = "/saran/RNA2/GSEA/COvsMock_GO_greater.txt", sep = "\t")
+```
+
+
+# Collect Genes of GO pathways 
+```{r}
+# Get titles of upregulated GO Biological Processes
+go_genes <- go.sets.hs[rownames(gobpres$greater)]
+# Select Genes Involved in the Processes - entrez IDs
+iir <- go_genes$`GO:0045087 innate immune response` #
+drtv <- go_genes$`GO:0051607 defense response to virus` 
+rtv <- go_genes$`GO:0009615 response to virus` #
+th1 <- go_genes$`GO:0042088 T-helper 1 type immune response`
+th2 <- go_genes$`GO:0042092 type 2 immune response`
+
+# Get Gene symbols for Entrez IDs
+iir_genes <- getSYMBOL(as.vector(iir),'org.Hs.eg.db')
+drtv_genes <- getSYMBOL(as.vector(drtv),'org.Hs.eg.db')
+rtv_genes <- getSYMBOL(as.vector(rtv),'org.Hs.eg.db')
+th1_genes <- getSYMBOL(as.vector(th1),'org.Hs.eg.db')
+th2_genes <- getSYMBOL(as.vector(th2),'org.Hs.eg.db')
+
+
+# Select Gene Names Only
+iir <- data.frame(iir_genes)$iir_genes
+drtv <- data.frame(drtv_genes)$drtv_genes
+rtv <- data.frame(rtv_genes)$rtv_genes
+th1 <- data.frame(th1_genes)$th1_genes
+th2 <- data.frame(th2_genes)$th2_genes
+
+# TOP DE genes ( from line 303 in edgeR) - 32
+top_genes <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_RSVvLac_cpm15.csv")
+top_genes <- top_genes[1:30,]
+top_genes <- top_gene_table
+
+# Find which of top genes are in each Process
+topNiir <- which(top_genes$external_gene_name %in% iir)
+topIIR <- top_genes[topNiir,]$external_gene_name
+topNdrtv <- which(top_genes$external_gene_name %in% drtv)
+topDRTV <- top_genes[topNdrtv,]$external_gene_name
+topNrtv <- topNrtv <- which(top_genes$external_gene_name %in% rtv)
+topRTV <- top_genes[topNrtv,]$external_gene_name
+topNth1 <- which(top_genes$external_gene_name %in% th1)
+topTH1 <- top_genes[topNth1,]$external_gene_name
+topNth2 <-  which(top_genes$external_gene_name %in% th2)
+topTH2 <- top_genes[topNth2,]$external_gene_name
+```
+
+## Heatmap
+```{r}
+# Read Normalized Counts Table
+#dtmm <- read.csv("/saran/RNA_Sara/finalRNAdata/EdgeR_Limma/tmm_norm_counts.csv")
+dtmm <- as.data.frame(dtmm)
+
+# Get Neccessary Annotations for Genes
+dtmm[,"ensembl_gene_id_version"] <- row.names(dtmm)
+dtmm_ensgid <- left_join(dtmm, results, by=c("ensembl_gene_id_version"))
+dtmm_ensgid$entrez = mapIds(org.Hs.eg.db,
+                     keys=dtmm_ensgid$ensembl_gene_id, 
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+dtmm_ensgid$symbol = mapIds(org.Hs.eg.db,
+                     keys=dtmm_ensgid$ensembl_gene_id, 
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+dtmm_ensgid$symbol <- as.character(dtmm_ensgid$symbol)
+dtmm_ensgid <- na.omit(dtmm_ensgid)
+
+# Select Sample Columns
+dtmm_exprs <- dtmm_ensgid %>% dplyr::select("Lac1", "Lac2", "Lac3", "RSV1", "RSV2", "RSV3")
+row.names(dtmm_exprs) <- dtmm_ensgid$ensembl_gene_id_version
+
+iir_df <- as.data.frame(topIIR)
+colnames(iir_df) <- "symbol"
+
+# Subset to only significant genes within IIR Gene-Set
+IIR <- left_join(iir_df, dtmm_ensgid, by=c("symbol"))
+IIR <- IIR %>% dplyr::select(ensembl_gene_id_version, symbol)
+# geneData() will output a scatterplot & heatmap of the genes expression under the outname in the current directory
+geneData(IIR, dtmm_exprs, ref = c(1,2,3), heatmap = TRUE, scatterplot = TRUE, outname = "iir_array_rna2_RSVvLac")
+```
+
+### BAR CHARTS OF SIGNIFICANT DIFFERENTIAL EXPRESSED GENE SETS
+# GO Pathway Analysis Pathways - Biological Process GREATER
+```{r}
+# GO Pathway Analysis Pathways - Biological Process - Greater
+neg.pval <-  -log(gobpres$greater[,4])
+neg.p.sort <- sort(neg.pval, decreasing =  T)
+head(neg.p.sort, 16)
+par(mar=c(5,25,4,1)+.1)
+barplot(neg.p.sort[1:16], col="red",horiz=TRUE, cex.names=0.1, las =2, main = "GO Biological Processes", xlab = "-log(adj.p.val)")
+```
+
+# GO Pathway Analysis Pathways - Biological Process LESS
+```{r}
+neg.pval <-  -log(gobpres$less[,4])
+neg.p.sort <- sort(neg.pval, decreasing =  T)
+head(neg.p.sort)
+par(mar=c(5,18,4,1)+.1)
+barplot(rev(neg.p.sort[1:10]), col="blue",horiz=TRUE, cex.names=0.8, las =2, main = "GO Biological Processes", xlab = "-log(adj.p.val)")
+```
+
+# GO Pathway Analysis Pathways - Cellular Component
+```{r}
+neg.pval <-  -log(goCCres$greater[,4])
+neg.p.sort <- sort(neg.pval, decreasing =  T)
+head(neg.p.sort)
+par(mar=c(5,16,4,1)+.1)
+barplot(neg.p.sort[1:4], col="red",  horiz=TRUE, cex.names=0.8, las =2, main = "GO Cellular Component", xlab = "-log(adj.p.val)")
+```
+
+# BAR CHART WITH BOTH GREATER & LESS
+```{r}
+df1 <- as.data.frame(gobpres$greater) %>% filter(q.val <= 0.05)
+df2 <- as.data.frame(gobpres$less) %>% filter(q.val <= 0.05)
+df <- rbind(df1,df2)
+par(mar=c(5,22,4,1)+.1)
+barplot(rev(-log(df$q.val[1:26])), names.arg = rownames(df), col="red", horiz=TRUE, cex.names=0.9, las =2, main = "GO Biological Processes", xlab = "-log(q.val)")
+
+par(mar=c(5,22,4,1)+.1)
+barplot(df$stat.mean[1:26], names.arg = rownames(df), col="red", horiz=TRUE, cex.names=0.9, las =2, main = "GO Biological Processes", xlab = "stat.mean")
+```
+
+# MSigDB Pathway Analysis Pathways (Molecular Signatures DataBase)
+```{r}
+neg.pval <-  -log(msigres$less[,4])
+neg.p.sort <- sort(neg.pval, decreasing =  T)
+head(neg.p.sort)
+par(mar=c(5,20,4,1)+.1)
+barplot(neg.p.sort[1:3], col="blue", horiz=TRUE, cex.names=0.8, las =2, main = "MSigDB Biological Processes", xlab = "-log(adj.p.val)")
+```
+
+# BAR CHART WITH BOTH GREATER & LESS - Molecular Signatures
+```{r}
+df1 <- as.data.frame(msigres$greater) %>% filter(q.val <= 0.05)
+df2 <- as.data.frame(msigres$less) %>% filter(q.val <= 0.05)
+df <- rbind(df1,df2)
+par(mar=c(5,22,4,1)+.1)
+barplot(df$stat.mean[1:7], names.arg = rownames(df), col="red", horiz=TRUE, cex.names=0.9, las =2, main = "MSigDB Biological Processes", xlab = "stat.mean")
+
+par(mar=c(5,18,4,1)+.1)
+barplot(-log(df$q.val[1:10]), names.arg = rownames(df), col="red", horiz=TRUE, cex.names=0.9, las =2, main = "MSigDB Biological Processes", xlab = "-log(q.val)")
+
+```
+
+# Kegg Pathway Analysis Pathways -Signaling and Metabolic
+```{r}
+neg.pval <-  -log(keggresSM$greater[,4])
+neg.p.sort <- sort(neg.pval, decreasing =  T)
+head(neg.p.sort)
+par(mar=c(5,16,4,1)+.1)
+barplot(rev(neg.p.sort[1:15]), col = "red", horiz=TRUE, cex.names=0.6, las =2, main = "KEGG Signaling & Metabolic Processes", xlab = "-log(adj.p.val)")
+```
+
+# WGCNA #####################################################################################################################################
+```{r, echo=FALSE, message=FALSE} 
+# Initialization
+library(ggplot2)
+library(dplyr)
+library(WGCNA)
+options(stringsAsFactors = FALSE)
+enableWGCNAThreads()
+allowWGCNAThreads()
+```
+
+```{r}
+# Read in log2 CPM values from Limma VoomWithQualityWeights
+v <- read.csv("/saran/RNA2/WGCNA/wgcna_COMOCK.csv", header = T)
+wcgna_v <- v %>% dplyr::select(Mock1,Mock2,Mock3,Co1,Co2,Co3) #,Lac1,Lac2,Lac3,RSV1,RSV2,RSV3
+# Set Rownames to ENSG version IDs
+rownames(wcgna_v) <- v$X
+# mockrsv <- wcgna_v %>% select(Mock1,Mock2,Mock3,RSV1,RSV2,RSV3)
+# lacmock <- wcgna_v %>% select(Mock1,Mock2,Mock3,Lac1,Lac2,Lac3)
+# comock <- wcgna_v %>% select(Mock1,Mock2,Mock3,Co1,Co2,Co3)
+# Transpose table
+wcgna_v <- t(wcgna_v)
+# mockrsv <- t(mockrsv)
+# lacmock <- t(lacmock)
+# comock <- t(comock)
+```
+
+```{r}
+# Read in MetaData to specify Mock & RSV samples
+setwd("/saran/RNA2/WGCNA/")
+metaData <- read.csv('coldata.csv', header = TRUE, sep = ",")
+metaData
+datTraits <- metaData %>% dplyr::select(condition)
+row.names(datTraits) <- metaData$sample
+datTraits
+
+datTraits <- metaData[c(1,2,3,4,5,6),] %>% dplyr::select(condition)
+row.names(datTraits) <- metaData$sample[c(1,2,3,4,5,6)]
+
+datTraits <- metaData[c(1,2,3,7,8,9),] %>% dplyr::select(condition)
+row.names(datTraits) <- metaData$sample[c(1,2,3,7,8,9)]
+
+datTraits <- metaData[c(1,2,3,10,11,12),] %>% dplyr::select(condition)
+row.names(datTraits) <- metaData$sample[c(1,2,3,10,11,12)]
+```
+
+### cluster samples to detect outliers
+```{r}
+sampleTree = hclust(dist(wcgna_v), method = "average");
+
+datTraits$condition <- as.numeric(as.factor(datTraits$condition))
+# Color by Condition
+traitColors = numbers2colors(datTraits, signed = FALSE)
+# Plot the sample dendrogram and the colors underneath.
+plotDendroAndColors(sampleTree, traitColors,
+                    groupLabels = names(datTraits), 
+                    main = "Sample dendrogram and trait heatmap")
+```
+
+```{r}
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to=30, by=2))
+# Call the network topology analysis function
+sft = pickSoftThreshold(wcgna_v, powerVector = powers, networkType = "unsigned", RsquaredCut = 0.8, verbose = 5)
+
+# Plot the results:
+# Scale-free topology fit index as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit, unsigned R^2",type="n",
+     main = paste("Scale independence"));
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     labels=powers,col="red");
+# this line corresponds to using an R^2 cut-off of h
+abline(h=0.8,col="red")
+```
+
+```{r}
+# Mean connectivity as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], sft$fitIndices[,5],
+     xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+     main = paste("Mean connectivity"))
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers,col="red")
+```
+
+### Run WCGNA
+```{r}
+# This function performs automatic network construction and module detection on large expression datasets in a block-wise manner.
+library(WGCNA)
+bwnet <- blockwiseModules(wcgna_v,
+  maxBlockSize = ncol(wcgna_v), # What size chunks (how many genes) the calculations should be run in
+  networkType = "unsigned",
+  TOMType = "unsigned", # topological overlap matrix
+  power = 9, # soft threshold for network construction - 9 suggested for unsigned network
+  corType = "pearson",
+  numericLabels = F, # Let's use numbers instead of colors for module labels
+  randomSeed = 1234, # there's some randomness associated with this calculation
+  minModuleSize = 30,
+  mergeCutHeight = 0.25, # threshold for merging modules
+  # saveTOMs = T,
+  # saveTOMFileBase = "wgcna_313_blockwise"
+)
+
+# Plot the dendrogram and the module colors underneath for block 1(all genes)
+module_eigengenes <- bwnet$MEs
+module_colors <- bwnet$colors
+table(module_colors)
+plotDendroAndColors(bwnet$dendrograms[[1]], module_colors[bwnet$blockGenes[[1]]], "Module Colors",
+                     dendroLabels = FALSE, hang = 0.03,
+                     addGuide = TRUE, guideHang = 0.05,
+                     main = "Gene dendrogram and module colors")
+
+# Print out a preview
+head(module_eigengenes)
+MEs0 = orderMEs(module_eigengenes) #Reorder given (eigen-)vectors such that similar ones (as measured by correlation) are next to each other.
+```
+
+```{r}
+plotEigengeneNetworks(module_eigengenes, "Eigengene adjacency heatmap",
+                      marDendro = c(3,3,2,4),
+                      marHeatmap = c(3,4,2,2), plotDendrograms = T,
+                      xLabelsAngle = 90)
+
+```
+
+```{r}
+# select appropriate samples for metaData
+metaData <- metaData[c(1,2,3,10,11,12),]
+
+# Create Model Matrix Design
+metaData$condition <- as.factor(metaData$condition)
+design <- model.matrix(~0+metaData$condition)
+colnames(design) <- levels(metaData$condition) #get the group
+
+nGenes = ncol(wcgna_v);
+nSamples = nrow(wcgna_v);
+moduleTraitCor = cor(module_eigengenes, design, use = "p");
+moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nSamples)
+
+sizeGrWindow(12,8)
+# Will display correlations and their p-values
+textMatrix = paste(signif(moduleTraitCor, 2), "\n(",
+signif(moduleTraitPvalue, 1), ")", sep = "");
+dim(textMatrix) = dim(moduleTraitCor)
+par(mar = c(1, 25, 4, 4));
+
+# Display the correlation values within a heatmap plot
+labeledHeatmap(Matrix = moduleTraitCor,
+xLabels = colnames(design),
+yLabels = names(module_eigengenes),
+ySymbols = names(module_eigengenes),
+colorLabels = FALSE,
+colors = blueWhiteRed(50),
+textMatrix = textMatrix,
+setStdMargins = FALSE,
+cex.text = 0.4,
+zlim = c(-1,1),
+main = paste("Module-trait relationships"))
+```
+
+# BoxPlots for Modules
+```{r}
+library(dplyr)
+
+# Boxplot
+row.names(metaData) <- metaData$sample
+metadata <- metaData %>% dplyr::select(condition)
+if(T){
+mes_group <- merge(MEs0,metadata,by="row.names") 
+library(gplots)
+library(ggpubr)
+library(grid)
+library(gridExtra)
+draw_ggboxplot <- function(data,Module="Module",group="group"){
+  ggboxplot(data,x=group, y=Module,
+            ylab = paste0(Module),
+            xlab = group,
+            fill = group,
+            palette = "jco",
+            add="jitter",
+            legend = "") +stat_compare_means(method = "t.test")
+}
+
+colorNames <- names(MEs0)
+pdf("Module-trait-relationshipCOMOCK_boxplot.pdf", width = 7.5,height = 1.6*ncol(MEs0))
+p <- lapply(colorNames,function(x) {
+  draw_ggboxplot(mes_group, Module = x, group = "condition")
+})
+do.call(grid.arrange,c(p,ncol=2)) 
+dev.off()
+}
+```
+
+## Find Genes in Purple Significant Module
+```{r}
+gene_module_key <- tibble::enframe(bwnet$colors, name = "gene", value = "module") %>%
+  # add the `ME` part so its more clear what these numbers are and it matches elsewhere
+  dplyr::mutate(module = paste0("ME", module))
+
+meS_genes <- gene_module_key %>%
+  dplyr::filter(module == "MEpurple")
+```
+
+```{r}
+# load biomart package
+library(biomaRt)
+library(dplyr)
+
+allgenes <- rbind(meS_genes)
+# Create vector of ensembl gene IDs
+ENSGv <- as.vector(allgenes$gene)
+
+# define biomart object
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+# listAttributes(mart)
+
+# query biomart - retrieve corresponding gene names to ENSGv
+results <- getBM(attributes = c("ensembl_gene_id", "ensembl_gene_id_version"),
+               filters = "ensembl_gene_id_version", values = ENSGv,
+               mart = mart)
+head(results)
+
+# Join tables - Purple
+table <- left_join(meS_genes, results, by=c("gene" = "ensembl_gene_id_version"))
+meS_genes <- table %>% dplyr::select(ensembl_gene_id, everything())
+head(meS_genes)
+```
+
+```{r}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+
+# Add Annotations - SALMON
+meS_genes$symbol = mapIds(org.Hs.eg.db,
+                     keys=meS_genes$ensembl_gene_id,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+meS_genes$entrez = mapIds(org.Hs.eg.db,
+                     keys=meS_genes$ensembl_gene_id,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+meS_genes$name =   mapIds(org.Hs.eg.db,
+                     keys=meS_genes$ensembl_gene_id,
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+dfPRP <- as.data.frame(apply(meS_genes,2,as.character))
+write.csv(dfPRP, "/saran/RNA2/WGCNA/PurpleCOMOCK_ModuleGenes.csv")
+
+```
+
+**Heatmap of expression matrix for a module's genes, with a barplot of the eigengene expression for that module**
+```{r}
+make_module_heatmap <- function(module_name,
+                                expression_mat = wcgna_v,
+                                metadata_df = metaData,
+                                gene_module_key_df = gene_module_key,
+                                module_eigengenes_df = module_eigengenes) {
+
+  # Set up the module eigengene with its refinebio_accession_code
+  module_eigengene <- module_eigengenes_df %>%
+    dplyr::select(all_of(module_name)) %>%
+    tibble::rownames_to_column("sample")
+
+  # Set up column annotation from metadata
+  col_annot_df <- metadata_df %>%
+    # Only select the treatment and sample ID columns
+    dplyr::select(sample, condition) %>%
+    # Add on the eigengene expression by joining with sample IDs
+    dplyr::inner_join(module_eigengene, by = "sample") %>%
+    # Arrange by patient and time point
+    dplyr::arrange(condition,sample) %>%
+    # Store sample
+    tibble::column_to_rownames("sample")
+
+  # Create the ComplexHeatmap column annotation object
+  col_annot <- ComplexHeatmap::HeatmapAnnotation(
+    # Supply treatment labels
+    condition = col_annot_df$condition,
+    # Add annotation barplot
+    module_eigengene = ComplexHeatmap::anno_barplot(dplyr::select(col_annot_df, module_name)),
+    # Pick colors for each experimental group in time_point
+    col = list(condition = c("mock" = "#f1a340", "co" = "#998ec3"))
+  )
+
+  # Get a vector of the Ensembl gene IDs that correspond to this module
+  module_genes <- gene_module_key_df %>%
+    dplyr::filter(module == module_name) %>%
+    dplyr::pull(gene)
+
+  # Set up the gene expression data frame
+  mod_mat <- expression_mat %>%
+    t() %>%
+    as.data.frame() %>%
+    # Only keep genes from this module
+    dplyr::filter(rownames(.) %in% module_genes) %>%
+    # Order the samples to match col_annot_df
+    dplyr::select(rownames(col_annot_df)) %>%
+    # Data needs to be a matrix
+    as.matrix()
+
+  # Normalize the gene expression values
+  mod_mat <- mod_mat %>%
+    # Scale can work on matrices, but it does it by column so we will need to
+    # transpose first
+    t() %>%
+    scale() %>%
+    # And now we need to transpose back
+    t()
+
+  # Create a color function based on standardized scale
+  color_func <- circlize::colorRamp2(
+    c(-2, 0, 2),
+    c("#67a9cf", "#f7f7f7", "#ef8a62")
+  )
+
+  # Plot on a heatmap
+  heatmap <- ComplexHeatmap::Heatmap(mod_mat,
+    name = module_name,
+    # Supply color function
+    col = color_func,
+    # Supply column annotation
+    bottom_annotation = col_annot,
+    # We don't want to cluster samples
+    cluster_columns = FALSE,
+    # We don't need to show sample or gene labels
+    show_row_names = FALSE,
+    show_column_names = FALSE
+  )
+
+  # Return heatmap
+  return(heatmap)
+}
+
+mod_S_heatmap <- make_module_heatmap(module_name = "MEpurple")
+mod_S_heatmap
+```
+
+###### ClusterProfiler Enrichment Analysis
+```{r}
+library(clusterProfiler)
+library(dplyr)
+library(DOSE)
+de <- res$entrez[1:102]
+de <- dfPRP$entrez
+
+ego <- enrichGO(de, OrgDb = org.Hs.eg.db, ont = "BP")
+
+library(enrichplot)
+barplot(ego, showCategory=10) 
+
+mutate(ego, qscore = -log(p.adjust, base=10)) %>% 
+    barplot(x="qscore")
+
+library(DOSE)
+ego <- enrichGO(gene          = de,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+dotplot(ego, showCategory=15)
+
+####################################################################################
+####### ENRICHMENT ANALYSIS FOR Top Genes in Top 3 Modules TOGETHER ################
+top_genes <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_COvMock_cpm10.csv")
+
+# Join tables - Purple Module
+table <- left_join(dfPRP, top_genes, by=c("gene" = "rowname"))
+prp_genes <- table %>% dplyr::select(entrez, everything())
+head(prp_genes)
+  
+  prp_up <- prp_genes[prp_genes$logFC > 0, ]
+  prp_up <- prp_up[order(prp_up$logFC, decreasing = T),]
+  
+  prp_down <- prp_genes[prp_genes$logFC < 0, ]
+  prp_down <- prp_down[order(prp_down$logFC, decreasing = T),]
+
+# Join tables - Yellow Module
+table <- left_join(dfYEL, top_genes, by=c("gene" = "rowname"))
+yel_genes <- table %>% dplyr::select(entrez, everything())
+head(yel_genes)
+  
+  yel_up <- yel_genes[yel_genes$logFC > 0, ]
+  yel_up <- yel_up[order(yel_up$logFC, decreasing = T),]
+  
+  yel_down <- yel_genes[yel_genes$logFC < 0, ]
+  yel_down <- yel_down[order(yel_down$logFC, decreasing = T),]
+
+# Join tables - Brown Module
+table <- left_join(dfBR, top_genes, by=c("gene" = "rowname"))
+brn_genes <- table %>% dplyr::select(entrez, everything())
+head(brn_genes)
+  
+  brn_up <- brn_genes[brn_genes$logFC > 0, ]
+  brn_up <- brn_up[order(brn_up$logFC, decreasing = T),]
+  
+  brn_down <- brn_genes[brn_genes$logFC < 0, ]
+  brn_down <- brn_down[order(brn_down$logFC, decreasing = T),]
+ 
+df_up <- rbind(brn_up, prp_up, yel_up)
+###run go analysis
+  formula_res <- compareCluster(
+    entrez ~ module,
+    data = prp_down, 
+    fun = "enrichGO",
+    OrgDb = org.Hs.eg.db,
+    ont = "BP",  
+    pAdjustMethod = "BH",
+    pvalueCutoff = 0.05,
+    qvalueCutoff = 0.05,
+    readable = T
+  )
+  
+  lineage1_ego <- clusterProfiler::simplify( 
+    formula_res,
+    cutoff= 0.05,
+    by="p.adjust",
+    select_fun=min
+  )
+  
+dotplot(lineage1_ego, showCategory=15)
+
+
+###############################################################################
+################ ENRICHMENT ANALYSIS PURPLE MODULE ############################
+# up-regulated 
+ego_up <- enrichGO(gene     = prp_up$entrez, # change to brn_up or yel_up
+              OrgDb         = org.Hs.eg.db,
+              ont           = "BP",
+              pAdjustMethod = "BH",
+              pvalueCutoff  = 0.05,
+              qvalueCutoff  = 0.05,
+              readable      = TRUE)
+dotplot(ego_up, showCategory=15)
+
+lineage1_ego <- clusterProfiler::simplify( 
+  ego_up,
+  cutoff= 0.05,
+  by="p.adjust",
+  select_fun=min
+)
+
+dotplot(lineage1_ego, showCategory=15)
+
+# down-regulated
+# ego_down <- enrichGO(gene   = red_down$entrez.x,
+#               OrgDb         = org.Hs.eg.db,
+#               ont           = "BP",
+#               pAdjustMethod = "BH",
+#               pvalueCutoff  = 0.05,
+#               qvalueCutoff  = 0.05,
+#               readable      = TRUE)
+# dotplot(ego_down, showCategory=15)
+#### 0 enriched terms found
+```
+
+```{r}
+# Define variable condition from datTrait
+status = as.data.frame(datTraits$condition);
+names(status) = "condition"
+# names (colors) of the modules
+MEs <- module_eigengenes
+modNames = substring(names(MEs), 3)
+geneModuleMembership = as.data.frame(cor(wcgna_v, MEs, use = "p"));
+MMPvalue = as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples));
+names(geneModuleMembership) = paste("MM", modNames, sep="");
+names(MMPvalue) = paste("p.MM", modNames, sep="");
+geneTraitSignificance = as.data.frame(cor(wcgna_v, status, use = "p"));
+GSPvalue = as.data.frame(corPvalueStudent(as.matrix(geneTraitSignificance), nSamples));
+names(geneTraitSignificance) = paste("GS.", names(status), sep="");
+names(GSPvalue) = paste("p.GS.", names(status), sep="");
+
+
+module = "salmon" # change to visualize different module
+column = match(module, modNames);
+moduleGenes = module_colors==module;
+sizeGrWindow(7, 7);
+par(mfrow = c(1,1));
+verboseScatterplot(abs(geneModuleMembership[moduleGenes, column]),
+abs(geneTraitSignificance[moduleGenes, 1]),
+xlab = paste("Module Membership in", module, "module"),
+ylab = "Gene significance for conditon",
+main = paste("Module membership vs. gene significance\n"),
+cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
+```
+
+################################################################################
+## Network Analysis
+################################################################################
+```{r}
+prp_probes <- colnames(wcgna_v)[module_colors=="salmon"]
+# top <- top_genes$ensembl_gene_id_version[1:32]
+# prp_probes <- append(colnames(filterModTom), top)
+# prp_probes <- append(prp_probes, top)
+probes_annot <- data.frame(ensg = prp_probes)
+
+# Create vector of ensembl gene IDs
+ENSGv <- as.vector(probes_annot$ensg)
+
+# define biomart object
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+# listAttributes(mart)
+
+# query biomart - retrieve corresponding gene names to ENSGv
+results <- getBM(attributes = c("ensembl_gene_id", "ensembl_gene_id_version"),
+               filters = "ensembl_gene_id_version", values = ENSGv,
+               mart = mart)
+head(results)
+
+# Join tables
+table <- left_join(probes_annot, results, by=c("ensg" = "ensembl_gene_id_version"))
+probes_annot <- table %>% dplyr::select(ensembl_gene_id, everything())
+head(probes_annot)
+
+
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+
+# Add Annotations
+probes_annot$symbol = mapIds(org.Hs.eg.db,
+                     keys=probes_annot$ensembl_gene_id,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+probes_annot$entrez = mapIds(org.Hs.eg.db,
+                     keys=probes_annot$ensembl_gene_id,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+probes_annot$entrez <- as.character(probes_annot$entrez)
+probes_annot$symbol <- as.character(probes_annot$symbol)
+
+geneTraitSignificance$ensg <- rownames(geneTraitSignificance)
+probes <- left_join(probes_annot, geneTraitSignificance, by=c("ensg"))
+
+geneOrder = order(-abs(probes$GS.condition));
+geneInfo = probes[geneOrder,]
+# write.csv(geneInfo, "/saran/RNA_Sara/WCGNA/geneTraitSignificance_prp_DEGs_82.csv")
+```
+
+```{r}
+# Recalculate topological overlap
+TOM = TOMsimilarityFromExpr(wcgna_v, power = 9);
+# Select module
+module = "salmon"; #prp_degs
+# Select module probes
+
+# # Select module probes for including DEGs
+# prp_degs = (names(module_colors) %in% prp_probes)
+# inModule_rd = module_colors[prp_degs] # <- "prp_degs"
+
+inModule = (module_colors==module);
+# Select the corresponding Topological Overlap
+modTOM = TOM[inModule, inModule];
+dimnames(modTOM) = list(probes_annot$ensg, probes_annot$ensg)
+# dimnames(modTOM) = list(names(inModule_rd), names(inModule_rd))
+# Export the network into an edge list file VisANT can read
+# vis = exportNetworkToVisANT(modTOM,
+# file = paste("VisANTInput-", module, ".txt", sep=""),
+# weighted = TRUE,
+# threshold = 0, probeToGene = data.frame(probes_annot$entrez, probes_annot$symbol))
+
+# # for cytoscape
+#   cyt <- exportNetworkToCytoscape(modTOM,
+#                                  edgeFile = paste("CytoscapeInput-edges-", paste(module, collapse="-"), ".txt", sep=""),
+#                                  nodeFile = paste("CytoscapeInput-nodes-", paste(module, collapse="-"), ".txt", sep=""),
+#                                  weighted = TRUE,
+#                                  threshold = 0.15,  #weighted权重筛选阈值，可调整
+#                                  nodeNames = probes_annot$ensg, 
+#                                  nodeAttr = module_colors[inModule])
+#   
+ntop=50
+IMConn = softConnectivity(wcgna_v[,names(inModule_rd)])
+top = (rank(-IMConn) <= ntop)
+filterModTom <- modTOM[top,top]
+dim(filterModTom)
+
+colnames(filterModTom)
+
+# Create vector of ensembl gene IDs
+ENSGv <- as.vector(colnames(filterModTom))
+
+# define biomart object
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+# listAttributes(mart)
+
+# query biomart - retrieve corresponding gene names to ENSGv
+results <- getBM(attributes = c("ensembl_gene_id", "ensembl_gene_id_version"),
+               filters = "ensembl_gene_id_version", values = ENSGv,
+               mart = mart)
+head(results)
+
+# Join tables
+
+df <- data.frame(ensgid = ENSGv)
+df <- left_join(df, results, by=c("ensgid" = "ensembl_gene_id_version"))
+
+
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+
+# Add Annotations
+df$symbol = mapIds(org.Hs.eg.db,
+                     keys=df$ensembl_gene_id,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+df$entrez = mapIds(org.Hs.eg.db,
+                     keys=df$ensembl_gene_id,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+df$entrez <- as.character(df$entrez)
+df$symbol <- as.character(df$symbol)
+# write.csv(df, "/saran/RNA_Sara/WCGNA/prp_Module_DEGS_82sorted.csv")
+```
+
+### export to cytoscape
+```{r}
+# Recalculate topological overlap if needed
+TOM = TOMsimilarityFromExpr(wcgna_v, power = 9);
+modules = c("salmon"); #red_degs
+# Select module probes
+probes = colnames(wcgna_v)
+inModule = is.finite(match(module_colors, modules));
+modProbes = probes[inModule];
+# Select the corresponding Topological Overlap
+modTOM = TOM[inModule, inModule];
+dimnames(modTOM) = list(modProbes, modProbes)
+# Export the network into edge and node list files Cytoscape can read
+cyt_filt = exportNetworkToCytoscape(modTOM,
+edgeFile = paste("CytoscapeInput_SAL_DEGs-edges-", paste(modules, collapse="-"), ".txt", sep=""),
+nodeFile = paste("CytoscapeInput_SAL_DEGs-nodes-", paste(modules, collapse="-"), ".txt", sep=""),
+weighted = TRUE,
+threshold = 0.02,
+nodeNames = modProbes,
+altNodeNames = probes_annot$symbol, # probes_reddegs
+nodeAttr = module_colors["salmon"])
+
+write.csv(cyt_filt$edgeData, "./cytoscape_salmonDEGS_module_edgeData.csv")
+write.csv(cyt_filt$nodeData, "./cytoscape_salmonDEGS_module_nodeData.csv")
+```
+
+# VENN DIAGRAM showing overlap & differences of significant genes in RSV vs. Mock & Co-Inf vs. Mock
+```{r}
+library(ggvenn)
+
+# Results from Limma/EdgeR
+co_mock <- read.csv("/saran/RNA2/Limma-EDgeR/COvMock102.csv")
+rsv_mock <- read.csv("/saran/RNA2/Limma-EDgeR/top_DEGs_RSVvsMock_cpm15.csv")
+# initial_rsvMock <- read.csv("/saran/RNA_Sara/finalRNAdata/EdgeR_Limma/top_DEGs_cpm15.csv")
+
+comock_down <- co_mock %>% filter(logFC < 0) # 7
+comock_up <- co_mock %>% filter(logFC > 0) # 95
+
+rsv_mock <- rsv_mock[1:25,]
+rsvmock_down <- rsv_mock %>% filter(logFC < 0) # 2
+rsvmock_up <- rsv_mock %>% filter(logFC > 0) # 23
+
+# significant
+# initial <- initial_rsvMock$external_gene_name[1:35]
+co <- co_mock$external_gene_name[1:102]
+rsv <- rsv_mock$external_gene_name[1:25]
+
+list_genes <- unique(c(comock_down$external_gene_name, rsvmock_down$external_gene_name))
+coinf <- list_genes %in% comock_down$external_gene_name
+rsvs <- list_genes %in% rsvmock_down$external_gene_name
+# initials <- list_genes %in% initial
+
+# Venn Diagram
+# use data frame as input
+M <-tibble(value=list_genes,'Co-Infection'=coinf,'RSV' = rsvs)
+  
+# create Venn diagram and display all sets
+ggvenn(M, c("Co-Infection", "RSV"))
+
+# Want circles to be different sizes
+library("VennDiagram")
+
+grid.newpage()                    # Create new plotting page
+draw.pairwise.venn(area1 = 95,    # Draw pairwise venn diagram
+                   area2 = 23,
+                   cross.area = 23, category=c("Co-Infection v. Mock","RSV v. Mock"),
+                   fill=c("white","lightgrey"), ext.text = F, cex = 1.6, cat.cex = 1.5, alpha = c(0.5, 0.5),
+                   lwd =0.8, cat.pos = c(-0, 0), fontfamily = rep("sans", 3), cat.fontfamily = rep("sans", 2),
+                   fontface = rep("bold",3),  cat.fontface = rep("bold",2))
+
+grid.newpage()  
+venn.diagram(list(CoInfection = 1:102, A = 102:127), alpha = c(0.5, 0.5), lwd =0,
+             filename = "coinf_rsv_venn.pdf", 
+             category=c("Co-Infection v. Mock","RSV v. Mock"),
+             fill=c("Red","Yellow"), ext.text = F, cex = 2, cat.cex = 1.5, cat.pos = c(-50, 50))
+
+# gray no names
+grid.newpage()                    # Create new plotting page
+draw.pairwise.venn(area1 = 102,    # Draw pairwise venn diagram
+                   area2 = 25,
+                   cross.area = 24,
+                   fill=c("snow3","snow4"), ext.text = F, cex = 1.6, cat.cex = 1.5, alpha = c(0.5, 0.5),
+                   lwd =0.8, cat.pos = c(-0, 0), fontfamily = rep("sans", 3), cat.fontfamily = rep("sans", 2),
+                   fontface = rep("bold",3),  cat.fontface = rep("bold",2))
+
+library(plotrix)
+area1 = 102 
+area2 = 25
+r1 = round(sqrt(area1/pi))
+r2 = round(sqrt(area2/pi))
+xc = 12
+yc = 12
+plot(0:30,0:30,type="n",xlab="",ylab="",main="Venn Diagram", xaxt='n', yaxt='n')
+draw.circle(xc+r1,yc+r1,r1,border="black", col="white",lty=1,lwd=1)
+draw.circle(xc+2*r1-r2,yc+r1,r2,border="black", col="white",lty=1,lwd=1)
+text(xc+2*r1-r2,yc+r1, '', cex=3)  
+text(xc+(r1-r2)/2+1,yc+r1, '195', cex=3) 
+text(xc+r1,yc+2*r1+7, 'Set1', cex=3) 
+text(xc+r1+r2,1, 'Set2', cex=3) 
+```
+
+
+
+
+
+
+
