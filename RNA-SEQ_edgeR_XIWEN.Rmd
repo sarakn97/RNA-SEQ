@@ -1,0 +1,262 @@
+---
+title: "XIWEN_RNA_SEQ"
+author: "Sara Nicholson"
+date: "2024-01-16"
+output: html_document
+---
+# EdgeR #
+
+### Initializations
+```{r}
+library(edgeR)
+library(dplyr)
+library(tibble)
+```
+
+**Read Counts File**
+```{r}
+# Read in your count table
+x <- read.csv("/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/count_table.csv", row.names="features")
+head(x)
+x <- x %>% dplyr::select("S13", "S14", "S5", "S8",  "S4", "S6", "S7", "S9", "S10", "S11", "S12", "S15") 
+
+# load biomart package
+library(biomaRt)
+
+# Create vector of ensembl gene IDs
+ENSG <- as.vector(row.names(x))
+
+# define biomart object
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+# query biomart - retrieve corresponding gene names to ENSG
+results <- getBM(attributes = c("ensembl_gene_id_version", "external_gene_name", "ensembl_gene_id"),
+               filters = "ensembl_gene_id_version", values = ENSG,
+               mart = mart)
+head(results)
+
+# Write conversion chart to CSV
+# write.csv(results, "/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/ENSG_symbol_conversions.csv")
+```
+
+```{r}
+# Create Factored Groups from Column Names 
+# Must be in same order as column names on count table
+DataGroups <- factor(c("CTRL",  "CTRL",  "CTRL", "CTRL", "BICT", "CABO", "CABO",  "CABO", "BICT", "CABO", "BICT", "BICT"), levels = c("CTRL", "BICT", "CABO"))
+
+Donor <- c("HD260", "MOLT4", "HD265", "HD264", "HD265", "HD260", "MOLT4", "HD265", "MOLT4", "HD264", "HD260", "HD264")
+
+# Create DGEList for EdgeR
+d <- DGEList(counts=x,group=DataGroups)
+d$samples$donor <- factor(Donor)
+head(d$samples)
+```
+
+
+### Filter Out Lowly Expressed Genes
+Use the cpm function & remove features that are not expressed over 1 CPM in at least 3 (SMALLEST GROUP SIZE - 1) samples.
+```{r}
+# Check Prior Dimensions
+dim(d) #62703
+
+# Function to remove features not expressed over 1 CPM in at least 3 group
+keep <- rowSums(cpm(d)>1) >= 3
+d <- d[keep,]
+
+# Check Dimensions after Filtering
+dim(d) #15195
+
+###################### edgeR recommended
+dim(d) #62703
+keep <- filterByExpr(d, group= d$samples$group)
+ d <- d[keep, , keep.lib.sizes=FALSE]
+ dim(d) # 16493
+```
+*17586 genes remain in analysis*
+
+
+### Normalize for Library Size: TMM Normalization.
+*'If a small proportion of highly expressed genes consume a substantial proportion of the total library size for a particular sample, this will cause the remaining genes to be under-sampled for that sample.....The calcNormFactors function normalizes the library sizes by finding a set of scaling factors for the library sizes that minimizes the log-fold changes between the samples for most genes.' -EdgeR*
+```{r}
+# set method to TMM or CPM normalization will be implemented
+d <- calcNormFactors(d, method = "TMM")
+# view Normalization Factors
+d$samples
+dim(d)
+
+# use cpm() function to get normalized counts - applies normalization factors so it is TMM when in combination with above function
+dtmm <- as.data.frame(cpm(d))
+head(dtmm)
+
+# Write TMM normalized Counts to Data Frame CSV for future use
+# write.csv(dtmm, "/Shuai_RNA/ANALYSIS/LimmaEdgeR/tmm_norm_counts_all_samp.csv")
+```
+
+# Limma #
+### Initializations
+```{r}
+library(limma)
+library(Glimma)
+library(dplyr)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(biomaRt)
+```
+
+**Unsupervised Clustering of Samples**
+```{r}
+# equivalent to plotMDS of cpm(d, log = T) 
+mds <- plotMDS(d, col = as.numeric(d$samples$donor), pch = 19)
+mds
+
+plotMDS(d, col = as.numeric(d$samples$group))
+plotMDS(d, col = as.numeric(d$samples$group), gene.selection = "common", cex = 1, pch = 19)
+```
+
+```{r}
+library(sva)
+# Create Design Matrix (BLOCKING)
+design <- model.matrix(~ d$samples$donor + d$samples$group) #  + d$samples$donor
+design
+```
+
+# EDGE-R
+```{r}
+dge <- estimateDisp(d, design, robust = T)
+fit <- glmQLFit(dge, design)
+
+# BICT
+qlfB <- glmQLFTest(fit, coef=5)
+topTags(qlfB)
+
+# CABO
+qlfC <- glmQLFTest(fit, coef=6)
+topTags(qlfC)
+
+res_BICT=as.data.frame(topTags(qlfB, n=Inf))
+head(res_BICT)
+res_BICT$ensembl_gene_id_version <- row.names(res_BICT)
+head(res_BICT)
+
+# Get Tob Gene Tables for BICTvCTRL & CABOvCTRL DEA
+res_CABO=as.data.frame(topTags(qlfC, n=Inf))
+head(res_CABO)
+res_CABO$ensembl_gene_id_version <- row.names(res_CABO)
+head(res_CABO)
+
+# Add annotations for genes
+conversions <- read.csv("/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/ENSG_symbol_conversions.csv")
+res <- left_join(res_BICT, conversions, by=c("ensembl_gene_id_version"))
+res_BICT <- res %>% dplyr::select(external_gene_name, logCPM, PValue, logFC, FDR, ensembl_gene_id_version)
+
+conversions <- read.csv("/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/ENSG_symbol_conversions.csv")
+res <- left_join(res_CABO, conversions, by=c("ensembl_gene_id_version"))
+res_CABO <- res %>% dplyr::select(external_gene_name, logCPM, PValue, logFC, FDR, ensembl_gene_id_version)
+
+# write.csv(res_CABO, "/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/edgeR_results_CABOvCTRL.csv")
+# write.csv(res_BICT, "/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/edgeR_results_BICTvCTRL.csv")
+
+##### explore average log2 CPM expression
+c <- d$counts
+cpms <- cpm(c)
+log2cpms <- log2(cpms)
+avelog2cpms <- apply(log2cpms, 1, function(x) mean(x))
+# write.csv(log2cpms, "/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/log2cpms.csv")
+# write.csv(cpms, "/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/cpms.csv")
+
+
+#########################################################
+res_BICT$sig = as.factor(ifelse(res_BICT$FDR < 0.05 & abs(res_BICT$logFC)> 2,
+ifelse(res_BICT$logFC > 2 ,'up','down'),'not'))
+summary(res_BICT$sig)
+
+res_BICT$sig = as.factor(
+ifelse(res_BICT$FDR < 0.05, ifelse(res_BICT$logFC > 0 ,'up','down'),'not'))
+summary(res_BICT$sig)
+
+significant <- res_BICT %>% filter(sig == "up" | sig == "down")
+dim(significant) # 0
+
+# write.csv(significant, "/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/sig_genes_BICT_nologFCthresh.csv")
+#####
+res_CABO$sig = as.factor(ifelse(res_CABO$FDR < 0.05 & abs(res_CABO$logFC)> 2,
+ifelse(res_CABO$logFC > 2 ,'up','down'),'not'))
+summary(res_CABO$sig)
+
+res_CABO$sig = as.factor(
+ifelse(res_CABO$FDR < 0.05, ifelse(res_CABO$logFC > 0 ,'up','down'),'not'))
+summary(res_CABO$sig)
+
+significant <- res_CABO %>% filter(sig == "up" | sig == "down")
+dim(significant) # 0
+
+# write.csv(significant, "/XIWEN/RNA-SEQ-FQ-2024/ANALYSIS/sig_genes_CABO_nologFCthresh.csv")
+
+
+# ##################################### average log 2 cpm expression
+# c <- d$counts
+# cpms <- cpm(c)
+# log2cpms <- log2(cpms)
+# log2cpms <- as.data.frame(log2cpms)
+# log2cpms$rowname <- row.names(log2cpms)
+# sslog2cpms <- log2cpms %>% filter(rowname %in% significant$ensembl_gene_id_version)
+# sslog2cpms <- sslog2cpms %>% dplyr::select(hsc18, hsc20, hsc30, hsc35, hsc36, hsc3, hsc4, hsc23, hsc25, hsc33)
+# avelog2cpms <- apply(as.matrix(sslog2cpms), 1, function(x) mean(x))
+# 
+# ####################### make CPM and count Tables
+# # CPM
+# cpms <- as.data.frame(cpms)
+# cpms$rowname <- row.names(cpms)
+# cpms <- cpms %>% filter(rowname %in% significant$ensembl_gene_id_version)
+# cpms <- left_join(cpms, conversions, by=c("rowname" = "ensembl_gene_id_version"))
+# 
+# na_idx <- which(is.na(cpms$external_gene_name))
+# cpms$external_gene_name[na_idx] <- cpms$rowname[na_idx]
+# em_idx <- (which(cpms$external_gene_name == ""))
+# cpms$external_gene_name[em_idx] <- cpms$rowname[em_idx]
+# 
+# row.names(cpms) <- cpms$external_gene_name
+# cpms <- cpms %>% dplyr::select(hsc18, hsc20, hsc30, hsc35, hsc36, hsc3, hsc4, hsc23, hsc25, hsc33)
+# write.csv(cpms, "./significant_cpms_edgeR.csv")
+# 
+# # Counts
+# counts <- as.data.frame(c)
+# counts$rowname <- row.names(counts)
+# counts <- counts %>% filter(rowname %in% significant$ensembl_gene_id_version)
+# counts <- left_join(counts, conversions, by=c("rowname" = "ensembl_gene_id_version"))
+# 
+# na_idx <- which(is.na(counts$external_gene_name))
+# counts$external_gene_name[na_idx] <- counts$rowname[na_idx]
+# em_idx <- (which(counts$external_gene_name == ""))
+# counts$external_gene_name[em_idx] <- counts$rowname[em_idx]
+# 
+# row.names(counts) <- counts$external_gene_name
+# counts <- counts %>% dplyr::select(hsc18, hsc20, hsc30, hsc35, hsc36, hsc3, hsc4, hsc23, hsc25, hsc33)
+# write.csv(counts, "./significant_counts_edgeR.csv")
+# 
+# # Explore Minimums
+# minsC <- apply(counts[1:5], 1, function(x) {min(x)})
+# minsI <- apply(counts[6:10], 1, function(x) {min(x)})
+# minsdf <- data.frame(control = minsC, infected = minsI)
+# maxofmins <- apply(minsdf, 1, function(x) {max(x)})
+# # min(maxofmins) == 12
+# # So, there are counts in either Infected or Control for each Gene 
+# 
+# ### Averages
+# avgC <- apply(counts[1:5], 1, function(x) {mean(x)})
+# avgI <- apply(counts[6:10], 1, function(x) {mean(x)})
+# avgdf <- data.frame(control = avgC, infected = avgI)
+# write.csv(avgdf, "/Shuai_RNA/ANALYSIS/LimmaEdgeR/sig_AVGcounts_edgeR.csv")
+# 
+# avgC <- apply(cpms[1:5], 1, function(x) {mean(x)})
+# avgI <- apply(cpms[6:10], 1, function(x) {mean(x)})
+# avgdf <- data.frame(control = avgC, infected = avgI)
+# write.csv(avgdf, "/Shuai_RNA/ANALYSIS/LimmaEdgeR/sig_AVGcpms_edgeR.csv")
+# 
+# lcpms <- log2(cpms)
+# avgC <- apply(lcpms[1:5], 1, function(x) {mean(x)})
+# avgI <- apply(lcpms[6:10], 1, function(x) {mean(x)})
+# avgdf <- data.frame(control = avgC, infected = avgI)
+# write.csv(avgdf, "/Shuai_RNA/ANALYSIS/LimmaEdgeR/sig_AVGlog2cpms_edgeR.csv")
+```
+
+**No Genes were found to be significant**
