@@ -1,0 +1,3 @@
+for i in /storage1/fs1/leyao.wang/Active/RNASeq_April23/RAW_FASTQ_FILES/*R1.fastq; do name=$(basename ${i} _L001_R1.fastq);
+       	echo ${name}; 
+	STAR --genomeDir /storage1/fs1/leyao.wang/Active/Users/run/rna.attempts/genomeDir --runThreadN 12 --readFilesIn /storage1/fs1/leyao.wang/Active/RNASeq_April23/RAW_FASTQ_FILES/${name}_L001_R1.fastq  /storage1/fs1/leyao.wang/Active/RNASeq_April23/RAW_FASTQ_FILES/${name}_L001_R2.fastq --outFileNamePrefix /storage1/fs1/leyao.wang/Active/saran/RNA2/STAR_loop/${name} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within --outSAMattributes Standard --outFilterMatchNminOverLread 0 --outFilterScoreMinOverLread 0 --outFilterMatchNmin  40; done 
